@@ -1,0 +1,32 @@
+topics:
+  速度与运动描述:
+    grades: [八年级]
+    objectives:
+      - 能区分路程、时间和速度，并说明各物理量的单位。
+      - 能使用 v=s/t 解决单一过程的速度计算问题。
+      - 能检查单位换算和结果数量级是否合理。
+    classroom_questions:
+      - 速度变大可能是路程变化还是时间变化？还需要哪些条件？
+      - 计算结果只有数字没有单位，信息完整吗？为什么？
+    timeline:
+      - {minutes: 5, stage: 现象导入, activity: 比较两段运动，讨论“谁更快”需要哪些数据。}
+      - {minutes: 9, stage: 概念建模, activity: 建立路程、时间、速度之间的数量关系。}
+      - {minutes: 9, stage: 例题示范, activity: 按已知量、公式、代入、单位、结论五步示范。}
+      - {minutes: 12, stage: 分层练习, activity: A/B/C 组完成直接计算、单位纠错和综合比较。}
+      - {minutes: 7, stage: 实验连接, activity: 设计测量小车平均速度所需的器材、变量和步骤。}
+      - {minutes: 3, stage: 随堂测, activity: 完成一道带单位换算的速度题。}
+    practice_sets:
+      A_基础巩固:
+        - {question: "物体运动100 m用时20 s，求速度。", answer: "5 m/s", purpose: 直接使用速度公式}
+        - {question: "物体以4 m/s运动30 s，求路程。", answer: "120 m", purpose: 变式使用s=vt}
+      B_重点纠错:
+        - {question: "汽车行驶72 km用时2 h，求平均速度。", answer: "36 km/h", purpose: 纠正公式和单位遗漏}
+        - {question: "跑步者运动600 m用时2 min，求速度。", answer: "5 m/s", purpose: 纠正分钟与秒换算}
+      C_拓展提升:
+        - {question: "甲行驶300 m用时50 s，乙行驶480 m用时80 s，比较速度。", answer: "甲乙均为6 m/s", purpose: 用比值比较运动快慢}
+        - {question: "某车前10 s行驶80 m，后20 s行驶120 m，求全程平均速度。", answer: "20/3 m/s", purpose: 区分平均速度与分段速度平均}
+    exit_ticket:
+      question: 骑行者行驶1.8 km用时6 min，求平均速度并写出单位换算。
+      answer: 5 m/s
+      checks: [是否统一单位, 是否写出公式, 是否正确代入, 结果是否带单位]
+

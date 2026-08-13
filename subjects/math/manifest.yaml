@@ -1,0 +1,16 @@
+id: math
+name: 数学
+version: 1.0
+status: 稳定
+description: 以步骤诊断、典型错因和可计算答案校验为核心的初中数学能力包。
+grades: [七年级, 八年级, 九年级]
+validator: SymPy
+demo_data:
+  pre_class: data/demo_class.csv
+  post_class: data/demo_post_class.csv
+capability_skills:
+  - gap-analysis-from-student-work
+  - differentiation-adapter
+  - hinge-question-designer
+  - retrieval-practice-generator
+

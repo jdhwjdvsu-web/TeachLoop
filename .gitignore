@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.env
+.env.*
+.streamlit/secrets.toml
+*.log
+outputs/*
+!outputs/.gitkeep
+data/*.db
+data/kb_index.json

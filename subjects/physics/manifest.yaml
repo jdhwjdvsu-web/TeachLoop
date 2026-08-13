@@ -1,0 +1,16 @@
+id: physics
+name: 物理
+version: 0.1
+status: 试用
+description: 面向公式、单位、数量关系和实验变量的初中物理能力包。
+grades: [八年级, 九年级]
+validator: 公式计算与单位检查
+demo_data:
+  pre_class: data/demo_physics.csv
+  post_class: data/demo_physics_post.csv
+capability_skills:
+  - gap-analysis-from-student-work
+  - worked-example-fading-designer
+  - criterion-referenced-rubric-generator
+  - checking-for-understanding-protocol-designer
+

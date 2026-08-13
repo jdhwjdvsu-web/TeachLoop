@@ -1,0 +1,57 @@
+source:
+  repository: https://github.com/GarethManning/education-agent-skills
+  pinned_commit: 4be2795b574e91bdcbb6bda01ab235a05cfadbcc84
+  license: CC BY-SA 4.0
+  author: Gareth Manning
+  integration: 元数据、能力编排与设计参考；未复制原始 SKILL.md 正文
+
+skills:
+  - id: curriculum-assessment/gap-analysis-from-student-work
+    name: 学情差距分析
+    stages: [diagnosis]
+    subjects: [通用]
+  - id: original-frameworks/learning-target-authoring-guide
+    name: 教学目标设计
+    stages: [planning]
+    subjects: [通用]
+  - id: curriculum-assessment/differentiation-adapter
+    name: 差异化教学调整
+    stages: [planning]
+    subjects: [通用]
+  - id: explicit-instruction/lesson-opening-designer
+    name: 课堂导入设计
+    stages: [planning]
+    subjects: [通用]
+  - id: questioning-discussion/hinge-question-designer
+    name: 关键节点提问
+    stages: [planning, assessment]
+    subjects: [通用]
+  - id: explicit-instruction/checking-for-understanding-protocol-designer
+    name: 理解检查
+    stages: [assessment]
+    subjects: [通用]
+  - id: curriculum-assessment/formative-assessment-technique-selector
+    name: 形成性评价选择
+    stages: [assessment]
+    subjects: [通用]
+  - id: curriculum-assessment/criterion-referenced-rubric-generator
+    name: 评价量规生成
+    stages: [assessment]
+    subjects: [语文, 物理]
+  - id: memory-learning-science/retrieval-practice-generator
+    name: 提取练习设计
+    stages: [planning, assessment]
+    subjects: [通用]
+  - id: memory-learning-science/cognitive-load-analyser
+    name: 认知负荷检查
+    stages: [planning]
+    subjects: [通用]
+  - id: inclusive-design/udl-options-designer
+    name: 多样化学习支持
+    stages: [planning]
+    subjects: [通用]
+  - id: professional-learning/reflective-practice-prompt-generator
+    name: 教师反思提示
+    stages: [feedback]
+    subjects: [通用]
+

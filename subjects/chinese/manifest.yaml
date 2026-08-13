@@ -1,0 +1,16 @@
+id: chinese
+name: 语文
+version: 0.1
+status: 试用
+description: 面向阅读理解与开放性表达，使用证据链和教师量规复核的初中语文能力包。
+grades: [七年级, 八年级, 九年级]
+validator: 量规与教师复核
+demo_data:
+  pre_class: data/demo_chinese.csv
+  post_class: data/demo_chinese_post.csv
+capability_skills:
+  - gap-analysis-from-student-work
+  - criterion-referenced-rubric-generator
+  - differentiation-adapter
+  - hinge-question-designer
+

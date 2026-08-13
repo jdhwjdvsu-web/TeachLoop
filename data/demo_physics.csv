@@ -1,0 +1,14 @@
+student_id,question_id,knowledge_point,student_answer,student_work,correct,response_time_sec,declared_error
+P001,V1,速度公式,2000 m/s,v=s*t,false,75,速度公式混淆
+P001,V2,单位换算,300 m/min,2 min直接代入,false,100,单位换算错误
+P001,V3,平均速度,7 m/s,分段速度直接平均,false,130,平均速度直接取平均
+P002,V1,速度公式,5 m/s,v=s/t,true,60,
+P002,V2,单位换算,5 m/s,2 min换成120 s,true,90,
+P002,V3,平均速度,20/3 m/s,总路程除以总时间,true,120,
+P003,V1,速度公式,5,计算正确但无单位,false,55,结果遗漏单位
+P003,V2,单位换算,300 m/s,分钟未换算,false,85,单位换算错误
+P003,V3,平均速度,20/3 m/s,总量计算正确,true,115,
+P004,V1,速度公式,5 m/s,公式代入正确,true,50,
+P004,V2,单位换算,5 m/s,单位换算正确,true,80,
+P004,V3,平均速度,7 m/s,直接平均两个速度,false,110,平均速度直接取平均
+
