@@ -3,7 +3,6 @@ from __future__ import annotations
 from sympy import Eq, Symbol, simplify, sympify
 from sympy.solvers.inequalities import solve_univariate_inequality
 
-
 x = Symbol("x")
 
 

@@ -5,7 +5,6 @@ from typing import Any
 
 from .subject_packs import infer_subject, misconception_strategy, topic_config
 
-
 GROUPS = ("A_基础巩固", "B_重点纠错", "C_拓展提升")
 
 
@@ -90,10 +89,14 @@ def generate_practice_sets(
     if profile.get("error_distribution"):
         main_error = profile["error_distribution"][0]["name"]
     sets = copy.deepcopy(config.get("practice_sets", {}))
+    exit_ticket = copy.deepcopy(config.get("exit_ticket", {}))
+    exit_ticket["target_knowledge_points"] = [
+        item["name"] for item in profile.get("knowledge_points", [])[:2]
+    ]
     return {
         "focus_error": main_error,
         **{group: list(sets.get(group, [])) for group in GROUPS},
-        "exit_ticket": copy.deepcopy(config.get("exit_ticket", {})),
+        "exit_ticket": exit_ticket,
         "validation_mode": "自动校验" if subject in {"数学", "物理"} else "量规＋教师复核",
     }
 
@@ -121,9 +124,31 @@ def review_output(lesson_plan: dict[str, Any], practice_sets: dict[str, Any]) ->
     capability = lesson_plan.get("capability_context", {})
     if not capability.get("subject_pack"):
         issues.append("未记录本次使用的学科能力包")
+    key_errors = lesson_plan.get("evidence_summary", {}).get("key_errors", [])
+    subject = lesson_plan.get("subject", "数学")
+    strategies = lesson_plan.get("key_strategies", [])
+    if key_errors and not any(
+        misconception_strategy(subject, error) in strategies for error in key_errors[:2]
+    ):
+        issues.append("教学策略未对准班级最高频错因")
+    weak_points = set(lesson_plan.get("evidence_summary", {}).get("weak_points", [])[:2])
+    covered = set(practice_sets.get("exit_ticket", {}).get("target_knowledge_points", []))
+    if weak_points and not weak_points.intersection(covered):
+        issues.append("随堂测未标记覆盖班级薄弱知识点")
+
+    def complexity(items: list[dict[str, Any]]) -> float:
+        if not items:
+            return 0.0
+        values = []
+        for item in items:
+            question = str(item.get("question", ""))
+            values.append(len(question) + 4 * sum(question.count(symbol) for symbol in "()+-*/"))
+        return sum(values) / len(values)
+
+    if complexity(practice_sets.get("C_拓展提升", [])) < 0.7 * complexity(practice_sets.get("A_基础巩固", [])):
+        issues.append("C 组练习的题面复杂度低于 A 组，难度梯度可能无效")
     return {
         "passed": not issues,
         "issues": issues,
-        "checks": ["课时一致性", "学情依据", "学科包追溯", "三层练习完整性", "教师确认边界"],
+        "checks": ["课时一致性", "学情依据", "错因—策略对齐", "随堂测覆盖", "三层难度梯度", "学科包追溯", "教师确认边界"],
     }
-

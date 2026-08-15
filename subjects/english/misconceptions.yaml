@@ -1,0 +1,6 @@
+misconceptions:
+  主谓一致错误: {patterns: ["he go", "she like", "it have", 主谓不一致], strategy: 圈出主语并用人称—动词变化表进行最小对比练习。}
+  时态标志忽略: {patterns: [yesterday go, last week play, 时态标志忽略], strategy: 先标记时间状语，再选择时态并检查动词形式。}
+  词汇语境误用: {patterns: [词义不合语境, 搭配错误], strategy: 使用上下文线索和常见搭配对比，而不是孤立背词义。}
+default_blank_error: 表达基础未形成
+default_error: 语言形式需要教师复核

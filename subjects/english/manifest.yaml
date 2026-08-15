@@ -1,0 +1,11 @@
+id: english
+name: 英语
+version: 0.1
+status: 试用
+description: 仅通过 YAML 定义错因、题型与量规的英语学科包，用于验证零核心代码扩展。
+grades: [七年级]
+validator: 结构与教师复核
+demo_data:
+  pre_class: data/demo_english.csv
+  post_class: data/demo_english_post.csv
+capability_skills: [gap-analysis-from-student-work, differentiation-adapter]

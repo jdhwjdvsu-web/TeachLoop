@@ -4,7 +4,6 @@ from html import escape
 
 import streamlit as st
 
-
 APPLE_GLASS_CSS = r"""
 <style>
 :root {

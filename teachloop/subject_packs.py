@@ -8,7 +8,6 @@ from typing import Any
 
 import yaml
 
-
 ROOT = Path(__file__).parents[1]
 SUBJECTS_ROOT = ROOT / "subjects"
 
@@ -68,12 +67,12 @@ def list_subject_packs() -> list[dict[str, Any]]:
             continue
         manifest = _read_yaml(directory / "manifest.yaml")
         packs.append(load_subject_pack(str(manifest["name"])))
-    order = {"数学": 0, "语文": 1, "物理": 2}
+    order = {"数学": 0, "语文": 1, "英语": 2, "物理": 3}
     return sorted(packs, key=lambda pack: order.get(str(pack.get("name")), 99))
 
 
 def subject_names() -> list[str]:
-    order = {"数学": 0, "语文": 1, "物理": 2}
+    order = {"数学": 0, "语文": 1, "英语": 2, "物理": 3}
     return sorted((pack["name"] for pack in list_subject_packs()), key=lambda x: order.get(x, 99))
 
 
@@ -129,9 +128,11 @@ def misconception_strategy(subject: str, name: str) -> str:
 def validate_subject_item(subject: str, topic: str, item: dict[str, Any]) -> bool:
     pack = load_subject_pack(subject)
     validator_path = Path(pack["directory"]) / "validators.py"
-    module = _load_validator(str(validator_path))
-    validator = getattr(module, "validate_item")
-    return bool(validator(topic, item, topic_config(topic, subject)))
+    if validator_path.exists():
+        module = _load_validator(str(validator_path))
+        validator = getattr(module, "validate_item")
+        return bool(validator(topic, item, topic_config(topic, subject)))
+    return bool(str(item.get("question", "")).strip() and str(item.get("answer", "")).strip())
 
 
 def pack_summary(subject: str, topic: str) -> dict[str, Any]:
