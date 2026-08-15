@@ -10,7 +10,6 @@ from typing import Any
 
 from pypdf import PdfReader
 
-
 VECTOR_SIZE = 512
 
 
@@ -56,7 +55,7 @@ def chunk_text(text: str, max_chars: int = 500, overlap: int = 80) -> list[str]:
 
 
 class LocalVectorKnowledgeBase:
-    """Small persistent vector store suitable for the competition MVP."""
+    """Small persistent BM25 store for local Chinese teaching materials."""
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -64,6 +63,9 @@ class LocalVectorKnowledgeBase:
         self.chunks: list[dict[str, Any]] = []
         if self.path.exists():
             self.chunks = json.loads(self.path.read_text(encoding="utf-8"))
+        for item in self.chunks:
+            item.setdefault("tokens", _tokens(item.get("text", "")))
+        self.last_search_stats: dict[str, Any] = {}
 
     @property
     def count(self) -> int:
@@ -86,6 +88,7 @@ class LocalVectorKnowledgeBase:
                     "page": page,
                     "section": index,
                     "text": chunk,
+                    "tokens": _tokens(chunk),
                 }
             )
             existing.add(identity)
@@ -102,13 +105,52 @@ class LocalVectorKnowledgeBase:
         return added
 
     def search(self, query: str, top_k: int = 4) -> list[dict[str, Any]]:
-        query_vector = embed_text(query)
+        query_tokens = _tokens(query)
+        if not query_tokens or not self.chunks:
+            self.last_search_stats = {"query": query, "candidates": len(self.chunks), "hits": 0}
+            return []
+        document_frequency = {
+            token: sum(token in set(item.get("tokens", [])) for item in self.chunks)
+            for token in set(query_tokens)
+        }
+        average_length = sum(len(item.get("tokens", [])) for item in self.chunks) / len(self.chunks)
         scored = []
         for item in self.chunks:
-            score = _cosine(query_vector, embed_text(item["text"]))
-            scored.append({**item, "score": round(float(score), 4)})
+            tokens = item.get("tokens", [])
+            counts = {token: tokens.count(token) for token in set(query_tokens)}
+            score = 0.0
+            for token in query_tokens:
+                frequency = counts.get(token, 0)
+                if not frequency:
+                    continue
+                df = document_frequency[token]
+                idf = math.log(1 + (len(self.chunks) - df + 0.5) / (df + 0.5))
+                denominator = frequency + 1.5 * (1 - 0.75 + 0.75 * len(tokens) / max(average_length, 1))
+                score += idf * frequency * 2.5 / denominator
+            public_item = {key: value for key, value in item.items() if key != "tokens"}
+            scored.append({**public_item, "score": round(float(score), 4)})
         scored.sort(key=lambda item: item["score"], reverse=True)
-        return [item for item in scored[:top_k] if item["score"] > 0]
+        results = [item for item in scored[:top_k] if item["score"] > 0]
+        self.last_search_stats = {"query": query, "candidates": len(self.chunks), "hits": len(results), "top_score": results[0]["score"] if results else 0}
+        return results
+
+    def delete_source(self, source: str) -> int:
+        before = len(self.chunks)
+        self.chunks = [item for item in self.chunks if item.get("source") != source]
+        removed = before - len(self.chunks)
+        if removed:
+            self._save()
+        return removed
+
+    def rename_source(self, source: str, new_name: str) -> int:
+        changed = 0
+        for item in self.chunks:
+            if item.get("source") == source:
+                item["source"] = new_name
+                changed += 1
+        if changed:
+            self._save()
+        return changed
 
     def sources(self) -> list[dict[str, Any]]:
         grouped: dict[str, dict[str, Any]] = {}

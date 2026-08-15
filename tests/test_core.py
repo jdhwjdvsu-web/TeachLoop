@@ -1,14 +1,16 @@
-from pathlib import Path
-from io import BytesIO
-from zipfile import ZipFile
 import json
+from io import BytesIO
+from pathlib import Path
+from zipfile import ZipFile
 
 import httpx
 import pandas as pd
+from docx import Document
 
-from teachloop.diagnosis import diagnose_class, infer_error_type
+from teachloop.diagnosis import diagnose_class, infer_error_type, validate_records
 from teachloop.feedback import compare_learning_outcomes
 from teachloop.knowledge_base import LocalVectorKnowledgeBase
+from teachloop.lesson import review_output
 from teachloop.llm_service import (
     EducationLLMService,
     LLMConfig,
@@ -21,8 +23,8 @@ from teachloop.math_validation import (
     validate_inequality_answer,
     validate_solution,
 )
-from teachloop.storage import TeachLoopStore
 from teachloop.skill_registry import orchestration_manifest, selected_skills
+from teachloop.storage import TeachLoopStore
 from teachloop.subject_packs import (
     demo_path,
     grades_for_subject,
@@ -30,9 +32,8 @@ from teachloop.subject_packs import (
     topics_for_subject,
     validate_subject_item,
 )
-from teachloop.word_export import build_delivery_zip
+from teachloop.word_export import build_delivery_zip, build_group_roster_csv
 from teachloop.workflow import run_teaching_workflow
-
 
 ROOT = Path(__file__).parents[1]
 
@@ -214,7 +215,7 @@ def test_workflow_with_mock_llm_enrichment():
 
 def test_selected_education_skills_and_subject_catalog():
     assert len(selected_skills()) == 12
-    assert subject_names() == ["数学", "语文", "物理"]
+    assert subject_names() == ["数学", "语文", "英语", "物理"]
     assert "记叙文阅读：人物形象分析" in topics_for_subject("语文", "七年级")
     assert grades_for_subject("物理") == ["八年级"]
     manifest = orchestration_manifest("语文")
@@ -257,3 +258,128 @@ def test_physics_subject_pack_validation_and_workflow():
         "单位换算错误",
         "平均速度直接取平均",
     }
+
+
+def test_yaml_only_english_pack_drives_error_inference():
+    row = {
+        "correct": False,
+        "student_answer": "He go to school.",
+        "student_work": "he go",
+        "knowledge_point": "第三人称单数",
+    }
+    assert infer_error_type(row, subject="英语") == "主谓一致错误"
+    records = pd.read_csv(demo_path("英语")).to_dict(orient="records")
+    result = run_teaching_workflow(
+        records,
+        {"subject": "英语", "grade": "七年级", "topic": "一般现在时：主谓一致", "duration": 45},
+    )
+    assert result["class_profile"]["error_distribution"][0]["name"] == "主谓一致错误"
+
+
+def test_record_validation_reports_dirty_row_details():
+    records = demo_records()[:2]
+    records[1] = {**records[1], "correct": "maybe", "response_time_sec": "fast"}
+    records.append({**records[0]})
+    errors = validate_records(records)
+    assert any("第 3 行" in item and "correct" in item for item in errors)
+    assert any("第 3 行" in item and "response_time_sec" in item for item in errors)
+    assert any("重复" in item for item in errors)
+
+
+def test_response_time_changes_student_group_and_is_reported():
+    records = [
+        {"student_id": "FAST", "question_id": "Q1", "knowledge_point": "K", "student_answer": "1", "student_work": "", "correct": True, "response_time_sec": 20},
+        {"student_id": "SLOW", "question_id": "Q1", "knowledge_point": "K", "student_answer": "1", "student_work": "", "correct": True, "response_time_sec": 200},
+        {"student_id": "FAST", "question_id": "Q2", "knowledge_point": "K", "student_answer": "1", "student_work": "", "correct": True, "response_time_sec": 20},
+        {"student_id": "SLOW", "question_id": "Q2", "knowledge_point": "K", "student_answer": "1", "student_work": "", "correct": True, "response_time_sec": 200},
+    ]
+    profile = diagnose_class(records, subject="数学")
+    assert "FAST" in profile["student_groups"]["C_拓展提升"]
+    assert "SLOW" in profile["student_groups"]["B_重点纠错"]
+    assert profile["time_analysis"]["slow_correct_count"] == 2
+
+
+def test_feedback_anchor_and_unmeasured_knowledge_point():
+    before = diagnose_class(demo_records(), subject="数学", topic="一元一次方程")
+    after = [
+        {"student_id": "S001", "question_id": "POST1", "linked_pre_question_id": "Q1", "knowledge_point": "移项与合并同类项", "student_answer": "2", "student_work": "", "correct": True, "response_time_sec": 30},
+        {"student_id": "S002", "question_id": "POST1", "linked_pre_question_id": "Q1", "knowledge_point": "移项与合并同类项", "student_answer": "2", "student_work": "", "correct": True, "response_time_sec": 35},
+    ]
+    feedback = compare_learning_outcomes(before, after)
+    assert feedback["question_anchor_changes"][0]["mapped"] is True
+    unmeasured = next(item for item in feedback["knowledge_changes"] if item["after_accuracy"] is None)
+    assert unmeasured["status"] == "未测"
+    assert feedback["comparison_warnings"]
+
+
+def test_group_roster_is_exported_to_csv_and_word():
+    result = run_teaching_workflow(
+        demo_records(), {"grade": "七年级", "topic": "一元一次方程", "duration": 45}
+    )
+    csv_text = build_group_roster_csv(result).decode("utf-8-sig")
+    assert "student_id,group" in csv_text
+    package = build_delivery_zip(result)
+    with ZipFile(BytesIO(package)) as archive:
+        document = Document(BytesIO(archive.read("01_学情分析报告.docx")))
+        text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+        table_text = "\n".join(cell.text for table in document.tables for row in table.rows for cell in row.cells)
+    assert "分组花名册" in text
+    assert "S001" in table_text
+
+
+def test_quality_review_rejects_unrelated_strategy():
+    result = run_teaching_workflow(
+        demo_records(), {"grade": "七年级", "topic": "一元一次方程", "duration": 45}
+    )
+    result["lesson_plan"]["key_strategies"] = ["播放一段与本课无关的视频。"]
+    report = review_output(result["lesson_plan"], result["practice_sets"])
+    assert report["passed"] is False
+    assert "教学策略未对准班级最高频错因" in report["issues"]
+
+
+def test_bm25_knowledge_base_source_management(tmp_path):
+    kb = LocalVectorKnowledgeBase(tmp_path / "kb.json")
+    kb.add_text("移项变号来源于等式两边同时进行相同操作。", "数学资料")
+    kb.add_text("人物形象分析需要观点、证据和解释。", "语文资料")
+    assert kb.search("等式 移项变号")[0]["source"] == "数学资料"
+    assert kb.rename_source("数学资料", "数学教材") == 1
+    assert kb.search("移项")[0]["source"] == "数学教材"
+    assert kb.delete_source("数学教材") == 1
+    assert all(item["source"] != "数学教材" for item in kb.search("移项", top_k=10))
+
+
+def test_llm_retries_after_rate_limit():
+    calls = {"count": 0}
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return httpx.Response(429, json={"error": "rate limited"})
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"ok": true}'}}], "usage": {"total_tokens": 4}})
+    client = OpenAICompatibleClient(
+        LLMConfig(base_url="https://example.test/v1", model="test", max_retries=2),
+        transport=httpx.MockTransport(handler),
+    )
+    assert client.complete_json("system", "user")["ok"] is True
+    assert client.last_call_metrics["attempts"] == 2
+
+
+def test_connection_falls_back_to_chat_when_models_missing():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(404, json={"error": "unsupported"})
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"ok": true}'}}]})
+    client = OpenAICompatibleClient(
+        LLMConfig(base_url="https://example.test/v1", model="test"),
+        transport=httpx.MockTransport(handler),
+    )
+    status = client.test_connection()
+    assert status["ok"] is True
+    assert status["method"] == "chat"
+
+
+def test_feedback_history_and_schema_version(tmp_path):
+    store = TeachLoopStore(tmp_path / "history.db")
+    feedback_id = store.save_feedback("测试课", {"overall_change": 0.1})
+    feedbacks = store.list_feedbacks()
+    assert feedbacks[0]["id"] == feedback_id
+    assert feedbacks[0]["payload"]["schema_version"] == 2

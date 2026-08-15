@@ -1,0 +1,5 @@
+student_id,question_id,knowledge_point,student_answer,student_work,correct,response_time_sec,linked_pre_question_id
+E001,G3,第三人称单数,He plays basketball.,he plays,true,42,G1
+E001,G4,语境运用,She likes music.,she likes,true,48,G2
+E002,G3,第三人称单数,He plays basketball.,he plays,true,38,G1
+E002,G4,语境运用,She likes music.,she likes,true,50,G2

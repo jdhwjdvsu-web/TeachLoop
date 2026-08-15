@@ -1,0 +1,16 @@
+topics:
+  一般现在时：主谓一致:
+    grades: [七年级]
+    objectives: [能识别第三人称单数主语, 能正确使用动词第三人称单数形式, 能依据语境检查主谓一致]
+    classroom_questions: [句子的主语是谁？, 为什么这个动词需要变化？]
+    timeline:
+      - {minutes: 5, stage: 错例导入, activity: 判断 he go 与 he goes 的差异。}
+      - {minutes: 10, stage: 规则归纳, activity: 从例句归纳第三人称单数变化。}
+      - {minutes: 12, stage: 对比练习, activity: 比较不同主语对应的动词形式。}
+      - {minutes: 12, stage: 分层表达, activity: A/B/C 组完成填空、纠错和情境表达。}
+      - {minutes: 6, stage: 随堂测, activity: 独立完成句子改写。}
+    practice_sets:
+      A_基础巩固: [{question: "He ___ to school every day. (go)", answer: goes, purpose: 识别第三人称单数}]
+      B_重点纠错: [{question: "改错：She like music.", answer: She likes music., purpose: 纠正主谓一致}]
+      C_拓展提升: [{question: 用第三人称介绍一位同学的日常活动。, answer: 按主谓一致与表达完整性量规评分。, purpose: 情境迁移}]
+    exit_ticket: {question: "改写：I play basketball. → He ...", answer: He plays basketball., checks: [主语是否正确, 动词是否变化]}

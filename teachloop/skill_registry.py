@@ -6,7 +6,6 @@ from typing import Any
 
 import yaml
 
-
 ROOT = Path(__file__).parents[1]
 CATALOG_PATH = ROOT / "education_skills" / "catalog.yaml"
 

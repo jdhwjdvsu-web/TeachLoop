@@ -1,0 +1,5 @@
+student_id,question_id,knowledge_point,student_answer,student_work,correct,response_time_sec
+E001,G1,第三人称单数,He go to school.,he go,false,35
+E001,G2,语境运用,She like music.,she like,false,50
+E002,G1,第三人称单数,He goes to school.,he goes,true,40
+E002,G2,语境运用,She likes music.,she likes,true,55

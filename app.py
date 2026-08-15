@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -9,15 +10,15 @@ import streamlit as st
 
 from teachloop.feedback import compare_learning_outcomes
 from teachloop.knowledge_base import LocalVectorKnowledgeBase
+from teachloop.lesson import regenerate_lesson_module, regenerate_practice_group, review_output
 from teachloop.llm_service import (
     EducationLLMService,
     LLMConfig,
     OpenAICompatibleClient,
     validate_generated_item,
 )
-from teachloop.lesson import regenerate_lesson_module, regenerate_practice_group, review_output
-from teachloop.storage import TeachLoopStore
 from teachloop.skill_registry import selected_skills, skills_for_stage
+from teachloop.storage import TeachLoopStore
 from teachloop.subject_packs import (
     demo_path,
     grades_for_subject,
@@ -35,9 +36,12 @@ from teachloop.ui import (
     render_status,
     workflow_stage,
 )
-from teachloop.word_export import build_delivery_zip
+from teachloop.word_export import (
+    build_delivery_zip,
+    build_feedback_students_csv,
+    build_group_roster_csv,
+)
 from teachloop.workflow import run_teaching_workflow
-
 
 ROOT = Path(__file__).parent
 DEMO_PATH = ROOT / "data" / "demo_class.csv"
@@ -46,6 +50,7 @@ INEQUALITY_DEMO_PATH = ROOT / "data" / "demo_inequality.csv"
 INEQUALITY_POST_DEMO_PATH = ROOT / "data" / "demo_inequality_post.csv"
 DB_PATH = ROOT / "data" / "teachloop.db"
 KB_PATH = ROOT / "data" / "kb_index.json"
+MAX_UPLOAD_MB = int(os.getenv("TEACHLOOP_MAX_UPLOAD_MB", "20"))
 
 
 st.set_page_config(
@@ -79,6 +84,19 @@ def get_knowledge_base() -> LocalVectorKnowledgeBase:
     return knowledge_base
 
 
+@st.cache_resource
+def get_cached_llm_service(
+    base_url: str, model: str, api_key: str, temperature: float
+) -> EducationLLMService:
+    config = LLMConfig(
+        base_url=base_url,
+        model=model,
+        api_key=api_key,
+        temperature=temperature,
+    )
+    return EducationLLMService(OpenAICompatibleClient(config))
+
+
 def current_llm_service() -> EducationLLMService | None:
     if not st.session_state.get("llm_enabled", False):
         return None
@@ -88,18 +106,27 @@ def current_llm_service() -> EducationLLMService | None:
     base_url = st.session_state.get("llm_base_url", "").strip()
     if not model or not base_url:
         return None
-    config = LLMConfig(
-        base_url=base_url,
-        model=model,
-        api_key=st.session_state.get("llm_api_key", ""),
-        temperature=float(st.session_state.get("llm_temperature", 0.2)),
+    return get_cached_llm_service(
+        base_url,
+        model,
+        st.session_state.get("llm_api_key", ""),
+        float(st.session_state.get("llm_temperature", 0.2)),
     )
-    return EducationLLMService(OpenAICompatibleClient(config))
 
 
 def json_download(label: str, payload: dict, filename: str, key: str) -> None:
     content = json.dumps(payload, ensure_ascii=False, indent=2, default=str).encode("utf-8")
     st.download_button(label, content, filename, "application/json", key=key)
+
+
+def csv_template_bytes(include_link: bool = False) -> bytes:
+    columns = [
+        "student_id", "question_id", "knowledge_point", "student_answer",
+        "student_work", "correct", "response_time_sec",
+    ]
+    if include_link:
+        columns.append("linked_pre_question_id")
+    return ("\ufeff" + ",".join(columns) + "\n").encode("utf-8")
 
 
 def clear_draft_on_task_change() -> None:
@@ -159,8 +186,21 @@ def render_result_overview(result: dict) -> None:
         error_frame = pd.DataFrame(profile["error_distribution"])
         if not error_frame.empty:
             st.bar_chart(error_frame.set_index("name"))
-        st.subheader("学生分组建议")
-        st.json(profile["student_groups"], expanded=True)
+        st.subheader("学生分组花名册")
+        st.dataframe(pd.DataFrame(profile.get("student_details", [])), width="stretch", hide_index=True)
+        st.download_button(
+            "下载 A/B/C 分组名单 CSV",
+            build_group_roster_csv(result),
+            "TeachLoop_分组花名册.csv",
+            "text/csv",
+            key="download_roster_overview",
+        )
+        time_analysis = profile.get("time_analysis", {})
+        st.caption(
+            f"班级平均用时 {time_analysis.get('overall_average_response_time_sec', 0)} 秒 · "
+            f"正确但偏慢 {time_analysis.get('slow_correct_count', 0)} 条 · "
+            f"错误且过快 {time_analysis.get('fast_wrong_count', 0)} 条"
+        )
         if profile.get("llm_findings"):
             st.subheader("模型对复杂步骤的补充发现")
             for finding in profile["llm_findings"]:
@@ -250,6 +290,13 @@ def render_prepare_page(
 
     with st.container(border=True):
         render_section_label("02 · 导入课前学情")
+        st.download_button(
+            "下载课前测 CSV 模板",
+            csv_template_bytes(),
+            "TeachLoop_课前测模板.csv",
+            "text/csv",
+            key="download_pre_template",
+        )
         uploaded = st.file_uploader(
             "拖入匿名课前测 CSV；也可以先用内置演示数据体验",
             type=["csv"],
@@ -522,7 +569,9 @@ def render_teacher_review_page(
             st.caption("完成教师定稿后开放 Word 最终交付包。")
 
 
-def render_feedback_page(store: TeachLoopStore) -> None:
+def render_feedback_page(
+    store: TeachLoopStore, llm_service: EducationLLMService | None = None
+) -> None:
     render_page_header(
         "STEP 04 · FEEDBACK",
         "看见课堂真正带来的变化",
@@ -535,6 +584,13 @@ def render_feedback_page(store: TeachLoopStore) -> None:
 
     with st.container(border=True):
         render_section_label("课堂结果")
+        st.download_button(
+            "下载随堂测 CSV 模板",
+            csv_template_bytes(include_link=True),
+            "TeachLoop_随堂测模板.csv",
+            "text/csv",
+            key="download_post_template",
+        )
         uploaded = st.file_uploader(
             "上传随堂测 CSV；也可以使用内置课后演示数据",
             type=["csv"],
@@ -545,6 +601,13 @@ def render_feedback_page(store: TeachLoopStore) -> None:
         frame = pd.read_csv(uploaded) if uploaded is not None else pd.read_csv(default_path)
         if uploaded is None:
             st.info("当前使用内置课后演示数据。")
+        if st.toggle("直接在页面录入或修改随堂测", key="direct_post_entry"):
+            frame = st.data_editor(
+                frame,
+                num_rows="dynamic",
+                width="stretch",
+                key="post_data_editor",
+            )
         with st.expander("预览随堂测数据"):
             st.dataframe(frame, width="stretch")
 
@@ -557,6 +620,8 @@ def render_feedback_page(store: TeachLoopStore) -> None:
         feedback = compare_learning_outcomes(
             result["class_profile"], frame.to_dict(orient="records")
         )
+        if llm_service is not None:
+            feedback = llm_service.enhance_feedback(feedback, result.get("teacher_request", {}))
         st.session_state["feedback_result"] = feedback
         feedback_id = store.save_feedback(result["lesson_plan"]["title"], feedback)
         st.session_state["last_feedback_id"] = feedback_id
@@ -569,6 +634,12 @@ def render_feedback_page(store: TeachLoopStore) -> None:
     c1.metric("课前正确率", f"{feedback['before_overall_accuracy']:.1%}")
     c2.metric("课后正确率", f"{feedback['after_overall_accuracy']:.1%}")
     c3.metric("整体变化", f"{feedback['overall_change']:+.1%}")
+    llm_feedback_status = feedback.get("feedback_llm_status", {})
+    if llm_feedback_status.get("message"):
+        st.caption(llm_feedback_status["message"])
+    st.caption(f"对照可信度：{feedback.get('comparison_reliability', '有限对照')}")
+    for warning in feedback.get("comparison_warnings", []):
+        st.warning(warning)
 
     st.subheader("知识点掌握变化")
     knowledge_frame = pd.DataFrame(feedback["knowledge_changes"])
@@ -584,8 +655,20 @@ def render_feedback_page(store: TeachLoopStore) -> None:
 
     st.subheader("错因减少情况")
     st.dataframe(pd.DataFrame(feedback["error_changes"]), width="stretch")
+    if feedback.get("question_anchor_changes"):
+        st.subheader("题目级锚点对照")
+        st.dataframe(pd.DataFrame(feedback["question_anchor_changes"]), width="stretch", hide_index=True)
     st.subheader("仍需继续干预的学生组")
     st.write("、".join(feedback["continued_intervention_students"]) or "暂无")
+    st.subheader("学生级前后变化")
+    st.dataframe(pd.DataFrame(feedback.get("student_changes", [])), width="stretch", hide_index=True)
+    st.download_button(
+        "下载学生干预明细 CSV",
+        build_feedback_students_csv(feedback),
+        "TeachLoop_学生干预明细.csv",
+        "text/csv",
+        key="feedback_students_download",
+    )
     st.subheader("下一节课建议")
     for suggestion in feedback["next_lesson_suggestions"]:
         st.markdown(f"- {suggestion}")
@@ -614,6 +697,18 @@ def render_knowledge_page(knowledge_base: LocalVectorKnowledgeBase) -> None:
         source_frame = pd.DataFrame(sources)
         source_frame["pages"] = source_frame["pages"].map(lambda pages: ", ".join(map(str, pages)))
         st.dataframe(source_frame, width="stretch")
+        with st.expander("管理已有资料", expanded=False):
+            selected_source = st.selectbox("选择资料", [item["source"] for item in sources], key="manage_kb_source")
+            renamed_source = st.text_input("新名称", value=selected_source, key="rename_kb_source")
+            c1, c2 = st.columns(2)
+            if c1.button("重命名资料", key="rename_kb"):
+                changed = knowledge_base.rename_source(selected_source, renamed_source.strip())
+                st.success(f"已更新 {changed} 个知识片段。")
+                st.rerun()
+            if c2.button("删除所选资料", key="delete_kb"):
+                removed = knowledge_base.delete_source(selected_source)
+                st.success(f"已删除 {removed} 个知识片段。")
+                st.rerun()
 
     uploaded = st.file_uploader("上传 PDF、Markdown 或 TXT", type=["pdf", "md", "txt"], key="kb_file")
     source_name = st.text_input(
@@ -623,8 +718,8 @@ def render_knowledge_page(knowledge_base: LocalVectorKnowledgeBase) -> None:
     )
     if st.button("解析并加入知识库", type="primary", disabled=uploaded is None, key="index_kb"):
         data = uploaded.getvalue()
-        if len(data) > 20 * 1024 * 1024:
-            st.error("文件超过 20MB，MVP 暂不处理。")
+        if len(data) > MAX_UPLOAD_MB * 1024 * 1024:
+            st.error(f"文件超过 {MAX_UPLOAD_MB}MB，当前配置暂不处理。")
         else:
             try:
                 if uploaded.name.lower().endswith(".pdf"):
@@ -640,6 +735,10 @@ def render_knowledge_page(knowledge_base: LocalVectorKnowledgeBase) -> None:
     query = st.text_input("输入备课主题或知识点", "一元一次方程 典型错因", key="kb_query")
     if st.button("检索教材依据", key="search_kb"):
         st.session_state["kb_search_results"] = knowledge_base.search(query, top_k=6)
+        st.session_state["kb_search_stats"] = knowledge_base.last_search_stats
+    if st.session_state.get("kb_search_stats"):
+        stats = st.session_state["kb_search_stats"]
+        st.caption(f"候选片段 {stats.get('candidates', 0)} · 命中 {stats.get('hits', 0)} · 最高 BM25 分数 {stats.get('top_score', 0)}")
     show_source_evidence(st.session_state.get("kb_search_results", []))
 
 
@@ -689,39 +788,34 @@ def render_history_page(store: TeachLoopStore) -> None:
         "所有定稿，清楚留存",
         "查看教师已确认的历史版本，随时重新下载 JSON 或完整 Word 交付包。",
     )
-    versions = store.list_versions()
-    if not versions:
-        st.info("还没有保存教师最终版本。")
-        return
-    overview = pd.DataFrame(
-        [
-            {
-                "版本": item["id"],
-                "标题": item["title"],
-                "状态": item["status"],
-                "保存时间": item["created_at"],
-            }
-            for item in versions
-        ]
-    )
-    st.dataframe(overview, width="stretch")
-    selected_id = st.selectbox("查看版本", [item["id"] for item in versions])
-    selected = next(item for item in versions if item["id"] == selected_id)
-    st.write(selected["teacher_note"] or "无教师备注")
-    render_result_overview(selected["payload"])
-    json_download(
-        "下载所选版本",
-        selected["payload"],
-        f"teachloop_version_{selected_id}.json",
-        f"history_download_{selected_id}",
-    )
-    st.download_button(
-        "下载所选版本 Word 交付包",
-        build_delivery_zip(selected["payload"], st.session_state.get("feedback_result")),
-        f"TeachLoop_版本_{selected_id}.zip",
-        "application/zip",
-        key=f"history_word_{selected_id}",
-    )
+    version_tab, feedback_tab = st.tabs(["教师定稿", "课后反馈"])
+    with version_tab:
+        all_versions = store.list_versions(limit=100)
+        subjects = [""] + sorted({item.get("subject", "") for item in all_versions if item.get("subject")})
+        selected_subject = st.selectbox("按学科筛选", subjects, format_func=lambda value: value or "全部学科")
+        topics = [""] + sorted({item.get("topic", "") for item in all_versions if item.get("topic") and (not selected_subject or item.get("subject") == selected_subject)})
+        selected_topic = st.selectbox("按课题筛选", topics, format_func=lambda value: value or "全部课题")
+        versions = store.list_versions(subject=selected_subject, topic=selected_topic)
+        if not versions:
+            st.info("还没有符合条件的教师最终版本。")
+        else:
+            st.dataframe(pd.DataFrame([{"版本": item["id"], "学科": item.get("subject", ""), "课题": item.get("topic", ""), "标题": item["title"], "状态": item["status"], "保存时间": item["created_at"]} for item in versions]), width="stretch", hide_index=True)
+            selected_id = st.selectbox("查看版本", [item["id"] for item in versions])
+            selected = next(item for item in versions if item["id"] == selected_id)
+            st.write(selected["teacher_note"] or "无教师备注")
+            render_result_overview(selected["payload"])
+            json_download("下载所选版本", selected["payload"], f"teachloop_version_{selected_id}.json", f"history_download_{selected_id}")
+            st.download_button("下载所选版本 Word 交付包", build_delivery_zip(selected["payload"], st.session_state.get("feedback_result")), f"TeachLoop_版本_{selected_id}.zip", "application/zip", key=f"history_word_{selected_id}")
+    with feedback_tab:
+        feedbacks = store.list_feedbacks()
+        if not feedbacks:
+            st.info("还没有保存课后反馈。")
+        else:
+            st.dataframe(pd.DataFrame([{"编号": item["id"], "教案": item["lesson_title"], "保存时间": item["created_at"]} for item in feedbacks]), width="stretch", hide_index=True)
+            feedback_id = st.selectbox("查看反馈", [item["id"] for item in feedbacks])
+            selected_feedback = next(item for item in feedbacks if item["id"] == feedback_id)["payload"]
+            st.json(selected_feedback, expanded=False)
+            st.download_button("下载学生干预明细 CSV", build_feedback_students_csv(selected_feedback), f"TeachLoop_反馈_{feedback_id}_学生明细.csv", "text/csv", key=f"history_feedback_{feedback_id}")
 
 
 store = get_store()
@@ -768,7 +862,7 @@ if page == "开始备课":
 elif page == "教师审核":
     render_teacher_review_page(store, llm_service)
 elif page == "课后反馈":
-    render_feedback_page(store)
+    render_feedback_page(store, llm_service)
 elif page == "教材知识库":
     render_knowledge_page(knowledge_base)
 elif page == "能力与学科包":

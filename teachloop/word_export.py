@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from io import BytesIO
+import csv
+from io import BytesIO, StringIO
 from typing import Any, Iterable
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -36,6 +37,26 @@ def _add_key_values(document: Document, items: Iterable[tuple[str, Any]]) -> Non
         cells[1].text = str(value)
 
 
+def build_group_roster_csv(result: dict[str, Any]) -> bytes:
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=["student_id", "group", "accuracy", "average_response_time_sec", "main_error", "slow_correct_count", "fast_wrong_count"],
+    )
+    writer.writeheader()
+    writer.writerows(result.get("class_profile", {}).get("student_details", []))
+    return ("\ufeff" + output.getvalue()).encode("utf-8")
+
+
+def build_feedback_students_csv(feedback: dict[str, Any]) -> bytes:
+    output = StringIO()
+    fields = ["student_id", "knowledge_point", "before_accuracy", "after_accuracy", "change", "main_error", "after_group", "continue_intervention"]
+    writer = csv.DictWriter(output, fieldnames=fields)
+    writer.writeheader()
+    writer.writerows(feedback.get("student_changes", []))
+    return ("\ufeff" + output.getvalue()).encode("utf-8")
+
+
 def build_analysis_docx(result: dict[str, Any], feedback: dict[str, Any] | None = None) -> bytes:
     profile = result["class_profile"]
     document = _new_document("班级学情分析报告")
@@ -55,18 +76,35 @@ def build_analysis_docx(result: dict[str, Any], feedback: dict[str, Any] | None 
         ],
     )
     document.add_heading("知识点掌握情况", level=1)
-    table = document.add_table(rows=1, cols=5)
+    table = document.add_table(rows=1, cols=6)
     table.style = "Table Grid"
-    for cell, label in zip(table.rows[0].cells, ["知识点", "作答数", "正确率", "受影响学生", "主要错因"]):
+    for cell, label in zip(table.rows[0].cells, ["知识点", "作答数", "正确率", "平均用时", "受影响学生", "主要错因"]):
         cell.text = label
     for item in profile["knowledge_points"]:
         cells = table.add_row().cells
-        values = [item["name"], item["attempts"], f"{item['accuracy']:.1%}", item["affected_students"], item["main_error"]]
+        values = [item["name"], item["attempts"], f"{item['accuracy']:.1%}", f"{item.get('average_response_time_sec', 0)} 秒", item["affected_students"], item["main_error"]]
         for cell, value in zip(cells, values):
             cell.text = str(value)
     document.add_heading("主要错因", level=1)
     for item in profile["error_distribution"]:
         document.add_paragraph(f"{item['name']}：{item['count']} 次", style="List Bullet")
+    document.add_heading("分组花名册", level=1)
+    roster = document.add_table(rows=1, cols=7)
+    roster.style = "Table Grid"
+    labels = ["学生编号", "分组", "正确率", "平均用时", "主要错因", "正确但偏慢", "错误且过快"]
+    for cell, label in zip(roster.rows[0].cells, labels):
+        cell.text = label
+    for item in profile.get("student_details", []):
+        values = [item["student_id"], item["group"], f"{item['accuracy']:.1%}", f"{item['average_response_time_sec']} 秒", item["main_error"], item["slow_correct_count"], item["fast_wrong_count"]]
+        for cell, value in zip(roster.add_row().cells, values):
+            cell.text = str(value)
+    time_analysis = profile.get("time_analysis", {})
+    document.add_heading("作答时间分析", level=1)
+    document.add_paragraph(
+        f"班级平均作答时间：{time_analysis.get('overall_average_response_time_sec', 0)} 秒；"
+        f"正确但耗时偏长：{time_analysis.get('slow_correct_count', 0)} 条；"
+        f"错误且作答过快：{time_analysis.get('fast_wrong_count', 0)} 条。"
+    )
     if feedback:
         document.add_heading("课前课后效果", level=1)
         document.add_paragraph(
@@ -108,6 +146,13 @@ def build_lesson_docx(result: dict[str, Any]) -> bytes:
         cells[0].text = f"{item['minutes']} 分钟"
         cells[1].text = str(item["stage"])
         cells[2].text = str(item["activity"])
+    document.add_heading("自动质量审查", level=1)
+    report = result.get("quality_report", {})
+    document.add_paragraph("通过" if report.get("passed") else "需要教师复核")
+    for check in report.get("checks", []):
+        document.add_paragraph(str(check), style="List Bullet")
+    for issue in report.get("issues", []):
+        document.add_paragraph(f"提示：{issue}")
     document.add_heading("教材与资料依据", level=1)
     for item in plan.get("source_evidence", []):
         page = f"第 {item['page']} 页" if item.get("page") else f"片段 {item.get('section', '')}"
@@ -160,6 +205,18 @@ def build_next_lesson_docx(feedback: dict[str, Any] | None) -> bytes:
     )
     document.add_heading("需要继续干预的学生", level=1)
     document.add_paragraph("、".join(feedback["continued_intervention_students"]) or "暂无")
+    if feedback.get("student_changes"):
+        document.add_heading("学生级前后变化", level=1)
+        table = document.add_table(rows=1, cols=7)
+        table.style = "Table Grid"
+        for cell, label in zip(table.rows[0].cells, ["学生", "知识点", "课前", "课后", "变化", "主要错因", "课后分组"]):
+            cell.text = label
+        for item in feedback["student_changes"]:
+            def pct(value: Any) -> str:
+                return "未测" if value is None else f"{float(value):.1%}"
+            values = [item["student_id"], item["knowledge_point"], pct(item["before_accuracy"]), pct(item["after_accuracy"]), pct(item["change"]), item["main_error"], item["after_group"]]
+            for cell, value in zip(table.add_row().cells, values):
+                cell.text = str(value)
     document.add_heading("下一课建议", level=1)
     for item in feedback["next_lesson_suggestions"]:
         document.add_paragraph(str(item), style="List Bullet")

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import time
+
 from langgraph.graph import END, START, StateGraph
 
 from .diagnosis import diagnose_class, validate_records
@@ -14,13 +17,20 @@ except ImportError:  # pragma: no cover - optional runtime guard
     EducationLLMService = object  # type: ignore[assignment,misc]
 
 
+logger = logging.getLogger("teachloop.workflow")
+
+
 def validate_input_node(state: TeachingState) -> TeachingState:
     return {"validation_errors": validate_records(state.get("records", []))}
 
 
 def diagnose_node(state: TeachingState) -> TeachingState:
-    profile = diagnose_class(state["records"])
     request = state.get("teacher_request", {})
+    profile = diagnose_class(
+        state["records"],
+        subject=request.get("subject"),
+        topic=request.get("topic"),
+    )
     profile["topic"] = request.get("topic", "一元一次方程")
     profile["subject"] = request.get("subject") or infer_subject(profile["topic"])
     return {"class_profile": profile}
@@ -130,11 +140,18 @@ def run_teaching_workflow(
     curriculum_context: list[dict] | None = None,
     llm_service: EducationLLMService | None = None,
 ) -> TeachingState:
+    started = time.perf_counter()
     app = build_workflow(llm_service=llm_service)
-    return app.invoke(
+    result = app.invoke(
         {
             "records": records,
             "teacher_request": teacher_request,
             "curriculum_context": curriculum_context or [],
         }
     )
+    logger.info(
+        "workflow_complete subject=%s topic=%s records=%s duration_ms=%.1f valid=%s",
+        teacher_request.get("subject"), teacher_request.get("topic"), len(records),
+        (time.perf_counter() - started) * 1000, not bool(result.get("validation_errors")),
+    )
+    return result

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -18,6 +19,9 @@ class LLMConfig:
     api_key: str = ""
     temperature: float = 0.2
     timeout_seconds: float = 60.0
+    max_tokens: int = 2400
+    max_retries: int = 2
+    response_format_json: bool = True
 
 
 class OpenAICompatibleClient:
@@ -26,6 +30,16 @@ class OpenAICompatibleClient:
     def __init__(self, config: LLMConfig, transport: httpx.BaseTransport | None = None):
         self.config = config
         self._client = httpx.Client(timeout=config.timeout_seconds, transport=transport)
+        self.last_call_metrics: dict[str, Any] = {}
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
 
     def _headers(self) -> dict[str, str]:
         headers = {
@@ -45,25 +59,49 @@ class OpenAICompatibleClient:
             response.raise_for_status()
             data = response.json()
             model_ids = [item.get("id", "") for item in data.get("data", [])]
-            return {"ok": True, "models": model_ids, "message": "连接成功"}
-        except Exception as error:
-            return {"ok": False, "models": [], "message": str(error)}
+            return {"ok": True, "models": model_ids, "message": "连接成功（/models）", "method": "models"}
+        except Exception as models_error:
+            try:
+                result = self.complete_json(
+                    "只返回 JSON。", '返回 {"ok": true}，不要添加其他内容。'
+                )
+                if result.get("ok") is True:
+                    return {"ok": True, "models": [], "message": "连接成功（最小聊天请求）", "method": "chat"}
+                raise ValueError("最小聊天请求返回内容不符合预期")
+            except Exception as chat_error:
+                return {"ok": False, "models": [], "message": f"/models: {models_error}; /chat/completions: {chat_error}", "method": "failed"}
 
     def complete_json(self, system: str, user: str) -> dict[str, Any]:
-        response = self._client.post(
-            self._url("chat/completions"),
-            headers=self._headers(),
-            json={
-                "model": self.config.model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "temperature": self.config.temperature,
-            },
-        )
+        payload: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "temperature": self.config.temperature,
+            "max_tokens": self.config.max_tokens,
+        }
+        if self.config.response_format_json:
+            payload["response_format"] = {"type": "json_object"}
+        started = time.perf_counter()
+        response: httpx.Response | None = None
+        attempts = 0
+        while attempts <= self.config.max_retries:
+            attempts += 1
+            response = self._client.post(self._url("chat/completions"), headers=self._headers(), json=payload)
+            if response.status_code < 400:
+                break
+            if response.status_code == 400 and "response_format" in payload:
+                payload.pop("response_format")
+                continue
+            if response.status_code not in {429, 500, 502, 503, 504} or attempts > self.config.max_retries:
+                response.raise_for_status()
+            time.sleep(0.25 * (2 ** (attempts - 1)))
+        assert response is not None
         response.raise_for_status()
         payload = response.json()
+        self.last_call_metrics = {
+            "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+            "attempts": attempts,
+            "usage": payload.get("usage", {}),
+        }
         content = payload["choices"][0]["message"]["content"]
         if isinstance(content, list):
             content = "".join(item.get("text", "") for item in content if isinstance(item, dict))
@@ -112,15 +150,11 @@ class EducationLLMService:
         practice_sets: dict[str, Any],
         request: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-        wrong_samples = [
-            {
-                "knowledge_point": row.get("knowledge_point"),
-                "student_answer": row.get("student_answer"),
-                "student_work": row.get("student_work"),
-            }
-            for row in records
-            if str(row.get("correct", "")).lower() not in {"true", "1", "yes", "正确"}
-        ][:12]
+        wrong_samples = {
+            "knowledge_points": profile.get("knowledge_points", [])[:6],
+            "error_distribution": profile.get("error_distribution", [])[:8],
+            "note": "仅发送聚合错因，不发送学生原始答案、步骤或编号。",
+        }
         safe_profile = {
             "overall_accuracy": profile.get("overall_accuracy"),
             "knowledge_points": profile.get("knowledge_points"),
@@ -138,7 +172,7 @@ class EducationLLMService:
             "grade": request.get("grade"),
             "duration_minutes": request.get("duration"),
             "class_profile": safe_profile,
-            "anonymous_wrong_samples": wrong_samples,
+            "aggregated_error_signals": wrong_samples,
             "evidence": evidence,
             "capability_context": lesson_plan.get("capability_context", {}),
             "required_json": {
@@ -238,3 +272,45 @@ class EducationLLMService:
         if "content" not in result:
             raise ValueError("模型局部重写缺少 content 字段")
         return result["content"]
+
+    def enhance_feedback(
+        self, feedback: dict[str, Any], request: dict[str, Any]
+    ) -> dict[str, Any]:
+        safe_payload = {
+            "subject": request.get("subject"),
+            "topic": request.get("topic"),
+            "knowledge_changes": feedback.get("knowledge_changes", []),
+            "error_changes": feedback.get("error_changes", []),
+            "intervention_group_counts": {
+                group: len(students)
+                for group, students in feedback.get("after_profile", {}).get("student_groups", {}).items()
+            },
+            "instruction": "返回 JSON：{\"next_lesson_suggestions\": [3-5条具体、可执行、包含知识点和干预策略的建议]}。不得输出学生编号。",
+        }
+        try:
+            generated = self.client.complete_json(
+                "你是教师课后反思助手，只使用聚合数据，不作正式学生评价。",
+                json.dumps(safe_payload, ensure_ascii=False),
+            )
+            suggestions = generated.get("next_lesson_suggestions", [])
+            if not isinstance(suggestions, list) or not suggestions:
+                raise ValueError("模型未返回下一课建议")
+            return {
+                **feedback,
+                "next_lesson_suggestions": [str(item) for item in suggestions[:5]],
+                "feedback_llm_status": {
+                    "used": True,
+                    "model": self.client.config.model,
+                    "metrics": self.client.last_call_metrics,
+                    "message": "下一课建议已使用聚合反馈数据增强。",
+                },
+            }
+        except Exception as error:
+            return {
+                **feedback,
+                "feedback_llm_status": {
+                    "used": False,
+                    "model": self.client.config.model,
+                    "message": f"反馈增强失败，已保留规则建议：{error}",
+                },
+            }
