@@ -15,4 +15,4 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt ruff pytest-cov
       - run: ruff check app.py teachloop tests subjects
-      - run: pytest --cov=teachloop --cov-report=term-missing --cov-fail-under=70
+      - run: python -m pytest --cov=teachloop --cov-report=term-missing --cov-fail-under=70
